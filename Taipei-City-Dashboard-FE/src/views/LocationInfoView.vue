@@ -281,7 +281,7 @@ function removeTag(id) {
 }
 </script>
 
-<style>
+<style scoped>
 h3 {
   font-size: 1.4rem;
   margin-top: 1.5rem;
