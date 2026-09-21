@@ -61,19 +61,20 @@ func ConnectToDatabases(dbNames ...interface{}) {
 func ConnectToDatabase(dbConfig global.DatabaseConfig) *gorm.DB {
 	// Constructing the database connection string using database configuration
 	dbargs := fmt.Sprintf(
-		"host=%s port=%s user=%s dbname=%s password=%s sslmode=disable",
+		"host=%s port=%s user=%s dbname=%s password=%s sslmode=%s",
 		dbConfig.Host,
 		dbConfig.Port,
 		dbConfig.User,
 		dbConfig.DBName,
 		dbConfig.Password,
+		dbConfig.SSLMode,
 	)
 
 	// Establish a connection to the database using gorm.Open and the constructed connection string
 	dbConn, err := gorm.Open(postgres.Open(dbargs), &gorm.Config{})
 	if err != nil {
 		// Log an error and panic if there is an issue connecting to the database
-		logs.FError("Error connecting to %s database", dbConfig.Host)
+		logs.FError("Error connecting to %s database: %v", dbConfig.Host, err)
 		panic("Connecting to database error")
 	}
 
@@ -127,6 +128,8 @@ func MigrateManagerSchema() {
 		DBManager.AutoMigrate(&Dashboard{}, &DashboardGroup{}, &Issue{}, &QueryCharts{})
 		DBManager.AutoMigrate(&ViewPoints{})
 		DBManager.AutoMigrate(&Incident{})
+		DBManager.AutoMigrate(&ChatLog{})
+		DBManager.AutoMigrate(&AIChatLog{})
 
 		// All users beneath the public group do not need to be added to the public group
 		// DBManager.Exec("ALTER TABLE auth_user_group_roles ADD CONSTRAINT check_group_id CHECK (group_id > 1);")

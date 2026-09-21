@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"TaipeiCityDashboardBE/app/models"
+	"TaipeiCityDashboardBE/app/services"
 
 	"github.com/gin-gonic/gin"
 )
@@ -191,7 +192,10 @@ func UpdateComponent(c *gin.Context) {
 		return
 	}
 
-	// 5. Return the component
+	// 5. Trigger Qdrant rebuild in the background
+    go services.RebuildQdrantPublicCollection()
+
+    // 6. Return the component
 	c.JSON(http.StatusOK, gin.H{"status": "success", "data": cityComponent})
 }
 
@@ -320,4 +324,30 @@ func DeleteComponent(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"status": "success", "chart_deleted": deleteChartStatus, "map_deleted": deleteMapStatus})
+}
+
+func GetComponentByQueryVector(c *gin.Context) {
+	query := c.PostForm("query")
+	limit, _ := strconv.Atoi(c.DefaultPostForm("limit", "10"))
+	scoreThreshold, _ := strconv.ParseFloat(c.DefaultPostForm("score", "0.78"), 64)
+
+	if limit > 30 {
+		limit = 30
+	}
+
+	if limit < 0 {
+		limit = 0
+	}
+
+	if scoreThreshold < 0 || scoreThreshold > 1 {
+		scoreThreshold = 0.78
+	}
+	
+	cityComponent, err := models.GetComponentByQueryVector(query, limit, scoreThreshold)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"status": "error", "message": err.Error()})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"status": "success", "data": cityComponent})
 }

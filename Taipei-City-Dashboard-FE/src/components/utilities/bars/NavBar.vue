@@ -24,6 +24,14 @@ const linkQuery = computed(() => {
 	const cityQuery = query.city ? `&city=${query.city}` : '';
 	return `${indexQuery}${cityQuery}`;
 });
+
+const location = computed(() => {
+	return window.location;
+});
+
+const isLocalhost = computed(() => {
+	return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+});
 </script>
 
 <template>
@@ -44,8 +52,7 @@ const linkQuery = computed(() => {
     </a>
     <div
       v-if="
-        authStore.currentPath !== 'admin' &&
-          !(authStore.isMobileDevice && authStore.isNarrowDevice)
+        authStore.currentPath !== 'admin'
       "
       class="navbar-tabs"
     >
@@ -99,7 +106,7 @@ const linkQuery = computed(() => {
         <ul>
           <li>
             <a
-              href="https://tuic.gov.taipei/documentation"
+              :href="isLocalhost ? 'https://citydashboard.taipei/documentation/' : `${location.origin}/documentation/`"
               target="_blank"
               rel="noreferrer"
             >技術文件</a>
@@ -191,11 +198,19 @@ const linkQuery = computed(() => {
 
 		h1 {
 			font-weight: 500;
+			
+			@media screen and (max-width: 500px) {
+				display: none;
+			}
 		}
 
 		h2 {
 			font-size: var(--font-s);
 			font-weight: 400;
+
+			@media screen and (max-width: 500px) {
+				display: none;
+			}
 		}
 
 		&-image {
@@ -235,12 +250,12 @@ const linkQuery = computed(() => {
 			}
 		}
 
-		@media screen and (max-width: 750px) {
-			display: none;
-		}
-		@media screen and (max-height: 500px) {
-			display: none;
-		}
+		// @media screen and (max-width: 750px) {
+		// 	display: none;
+		// }
+		// @media screen and (max-height: 500px) {
+		// 	display: none;
+		// }
 	}
 
 	&-user {

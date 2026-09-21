@@ -9,7 +9,7 @@ def _D050601(**kwargs):
         save_dataframe_to_postgresql,
         update_lasttime_in_data_to_dataset_info,
     )
-    from utils.extract_stage import get_data_taipei_api
+    from utils.extract_stage import get_current_rid_from_page_id, get_data_taipei_api
     from utils.transform_time import convert_str_to_time_format
 
     # Config
@@ -20,10 +20,10 @@ def _D050601(**kwargs):
     load_behavior = dag_infos.get("load_behavior")
     default_table = dag_infos.get("ready_data_default_table")
     history_table = dag_infos.get("ready_data_history_table")
-    RID = "047024e1-b7a2-4b74-b6ac-e9c2a0072593"
+    PAGE_ID = "493e8019-3de7-47fa-aa9b-cb4076e540a2"
 
     # Extract
-    raw_list = get_data_taipei_api(RID)
+    raw_list = get_data_taipei_api(get_current_rid_from_page_id(PAGE_ID))
     raw_data = pd.DataFrame(raw_list)
     raw_data["data_time"] = raw_data["_importdate"].iloc[0]["date"]
 
@@ -51,12 +51,14 @@ def _D050601(**kwargs):
         }
     )
     # define columns type
+    data["year"] = pd.to_numeric(data["year"], errors="coerce")
+    data = data.dropna(subset=["year"])
     data["year"] = data["year"].astype(int)
     float_cols = set(data.columns) - set(["_id", "_importdate", "year", "data_time"])
     for col in float_cols:
-        data[col] = data[col].astype(str)
-        data[col] = data[col].str.replace(",", "")
-        data[col] = data[col].astype(float)
+        data[col] = pd.to_numeric(
+            data[col].astype(str).str.replace(",", ""), errors="coerce"
+        )
     # standardize time
     data["data_time"] = convert_str_to_time_format(data["data_time"])
     # select columns

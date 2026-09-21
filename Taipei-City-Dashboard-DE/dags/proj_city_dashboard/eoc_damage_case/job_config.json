@@ -12,19 +12,20 @@
       "email_on_retry": false,
       "email_on_failure": true,
       "retries": 1,
-      "retry_delay": 60
+      "retry_delay": 60,
+      "queue": "realtime"
     },
     "ready_data_db": "postgres_default",
     "ready_data_default_table": "eoc_damage_case_tpe",
     "ready_data_history_table": "eoc_damage_case_tpe_history",
     "raw_data_db": "postgres_default",
     "raw_data_table": "",
-    "load_behavior": "replace"
+    "load_behavior": "current+history"
   },
   "data_infos": {
     "name_cn": "EOC最新受損情形資料",
     "airflow_update_freq": "every 5 minutes",
-    "source": "https://www.eocmap.gov.taipei/DisasterOperationSystemWebAPIUnite/api/DoItTaipeiApi/GetDamageCaseData",
+    "source": "https://tfd.blob.core.windows.net/blobfs/data/TEST-T-SAGEDamageCaseData.json",
     "source_type": "消防局 API",
     "source_dept": "消防局",
     "gis_format": "",

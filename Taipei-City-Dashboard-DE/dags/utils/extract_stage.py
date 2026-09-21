@@ -1,18 +1,20 @@
+import io
 import json
 import os
 import shutil
 import time
 import zipfile
 from pathlib import Path
-
+import glob
 import fiona
 import geopandas as gpd
 import pandas as pd
 import requests
+import xml.etree.ElementTree as ET
 from airflow.models import Variable
 from settings.global_config import DATA_PATH, PROXIES
 from utils.auth_tdx import TDXAuth
-
+import math
 
 def download_file(
     file_name,
@@ -56,7 +58,6 @@ def download_file(
         output:
         Id     名稱            面積    類型  集水區  物理型  水文HY  濱水植  水質WQ  生物BI  MIWC2017                                           geometry
         0   3  雁鴨保護區  1.799444e+06  重要濕地  NaN  NaN   NaN  NaN   NaN   NaN       NaN  MULTIPOLYGON (((121.51075 25.02214, 121.51083 ...
-    ```
     """
     full_file_path = f"{file_folder}/{file_name}"
     # download file
@@ -192,11 +193,62 @@ def get_kml(url, dag_id, from_crs, **kwargs):
 
     """
     file_name = f"{dag_id}.kml"
-    fiona.drvsupport.supported_drivers["KML"] = "rw"
+    
+    # Enable KML support in fiona
+    try:
+        fiona.drvsupport.supported_drivers["KML"] = "rw"
+    except AttributeError:
+        # For newer fiona versions that don't have drvsupport
+        pass
+    
     file = download_file(file_name, url, **kwargs)
-    gdf = gpd.read_file(file, driver="KML")
-    gdf = gpd.GeoDataFrame(gdf, crs=f"EPSG:{from_crs}")
+    
+    # Use fiona directly to avoid the geopandas._is_zip issue
+    try:
+        with fiona.open(file, driver='KML') as src:
+            gdf = gpd.GeoDataFrame.from_features(src, crs=src.crs)
+    except Exception:
+        # Fallback to the original method for older versions
+        gdf = gpd.read_file(file, driver="KML")
+    
+    # Ensure the CRS is set correctly
+    if gdf.crs is None:
+        gdf = gpd.GeoDataFrame(gdf, crs=f"EPSG:{from_crs}")
+    
     return gdf
+
+
+def get_current_rid_from_page_id(page_id, resource_name_contains=None, timeout=30):
+    """
+    Resolve the *current* resource id (rid) from a data.taipei dataset PAGE_ID.
+
+    Data owners rotate rid each time they republish the dataset. Hardcoding a rid
+    makes the DAG silently read a frozen snapshot. Use this helper to always read
+    the latest published resource.
+
+    Args:
+        page_id (str): Dataset page id (the UUID in the dataset detail URL).
+        resource_name_contains (str, optional): If given, pick the first resource
+            whose name contains this substring (for pages with multiple files).
+        timeout (int, optional): HTTP timeout in seconds.
+
+    Returns:
+        str: Current rid.
+
+    Raises:
+        ValueError: If the page has no resources.
+    """
+    url = f"https://data.taipei/api/frontstage/tpeod/dataset.view?id={page_id}"
+    res = requests.get(url, timeout=timeout)
+    res.raise_for_status()
+    resources = res.json().get("payload", {}).get("resources", [])
+    if not resources:
+        raise ValueError(f"No resources found for page_id={page_id}")
+    if resource_name_contains:
+        for r in resources:
+            if resource_name_contains in (r.get("name") or ""):
+                return r["rid"]
+    return resources[0]["rid"]
 
 
 def get_data_taipei_api(rid, timeout=60, output_format="json"):
@@ -381,32 +433,76 @@ def get_moenv_json_data(
         if sort_query:
             url += f"&sort={sort_query}"
 
-    if is_test:
-        limit = 10
-        offset = [0]
-    else:
-        res = requests.get(
-            f"{url}&offset=0&limit=1",
-            proxies=PROXIES if is_proxy else None,
-            timeout=timeout,
-        )
-        _check_request_status(res)
-        total_records = res.json()["total"]
-        limit = 1000
-        offset = [i for i in range(0, int(total_records), limit)]
-
+    # MOENV API v2 近年改為直接回傳 list(無 total/records 包裝),
+    # 舊格式為 {"total": N, "records": [...]}。此處兼容兩種格式,並改用
+    # 「持續分頁直到回傳少於 limit」避免依賴 total。
+    limit = 10 if is_test else 1000
     results = []
-    for o in offset:
+    offset = 0
+    max_pages = 1 if is_test else 1000
+    for _ in range(max_pages):
         res = requests.get(
-            f"{url}&offset={o}&limit={limit}",
+            f"{url}&offset={offset}&limit={limit}",
             proxies=PROXIES if is_proxy else None,
             timeout=timeout,
         )
         _check_request_status(res)
-        results.extend(res.json()["records"])
+        body = res.json()
+        if isinstance(body, list):
+            batch = body
+        elif isinstance(body, dict):
+            batch = body.get("records") or body.get("data") or []
+        else:
+            batch = []
+        if not batch:
+            break
+        results.extend(batch)
+        if len(batch) < limit:
+            break
+        offset += limit
         time.sleep(0.1)
 
     return results
+
+def get_shp_files_merge(
+    url, dag_id, encoding="UTF-8", file_ends_with=".shp", **kwargs
+):
+    """
+    下載 ZIP 並解壓縮，讀取所有 SHP 檔案，加入 category 欄位（檔名），然後合併。
+    回傳合併後的 GeoDataFrame。
+    """
+    filename = f"{dag_id}.zip"
+    unzip_path = f"{DATA_PATH}/{dag_id}"
+    zip_file = download_file(filename, url, **kwargs)
+    unzip_file_to_target_folder(zip_file, unzip_path, encoding=encoding)
+
+    # 找到所有 SHP 檔案
+    all_shp_files = glob.glob(os.path.join(unzip_path, f"*{file_ends_with}"))
+    if not all_shp_files:
+        raise ValueError(f"No .shp files found in {unzip_path}")
+
+    import fiona
+    from shapely.geometry import shape
+    
+    dfs = []
+    for shp_path in all_shp_files:
+        category = os.path.splitext(os.path.basename(shp_path))[0]
+        # 使用 fiona 直接開啟以避免 fiona.path 問題
+        with fiona.open(shp_path, encoding=encoding) as src:
+            records = []
+            geometries = []
+            for feature in src:
+                props = dict(feature.get("properties", {}))
+                geom = feature.get("geometry")
+                records.append(props)
+                geometries.append(shape(geom) if geom else None)
+            crs = src.crs
+            gdf = gpd.GeoDataFrame(records, geometry=geometries, crs=crs)
+        gdf["category"] = category
+        dfs.append(gdf)
+    # 合併
+    gdf_merged = gpd.GeoDataFrame(pd.concat(dfs, ignore_index=True))
+    return gdf_merged
 
 
 def get_shp_file(
@@ -464,7 +560,20 @@ def get_shp_file(
     if shp_file is None:
         raise ValueError(f"No .shp files found in {unzip_path}")
 
-    gdf = gpd.read_file(shp_file, encoding=encoding, from_crs=from_crs)
+    # 使用 fiona 直接開啟以避免 fiona.path 問題
+    import fiona
+    from shapely.geometry import shape
+    
+    with fiona.open(shp_file, encoding=encoding) as src:
+        records = []
+        geometries = []
+        for feature in src:
+            props = dict(feature.get("properties", {}))
+            geom = feature.get("geometry")
+            records.append(props)
+            geometries.append(shape(geom) if geom else None)
+        gdf = gpd.GeoDataFrame(records, geometry=geometries, crs=f"EPSG:{from_crs}")
+    
     print(f"Read {shp_file} successfully.")
     return gdf
 
@@ -533,7 +642,7 @@ def get_json_file(url, dag_id, encoding="UTF-8", output_format="json", **kwargs)
         DAG_ID = 'D050102_2'
         URL = "https://tppkl.blob.core.windows.net/blobfs/TaipeiTree.json"
         raw_data = get_json_file(
-            URL, DAG_ID, timeout=None, is_proxy=True, output_format="dataframe"
+            URL, DAG_ID, timeout=None, is_proxy=False, output_format="dataframe"
         )
         print(raw_data.iloc[0])
         ```
@@ -600,11 +709,28 @@ def get_geojson_file(url, dag_id, from_crs, encoding="UTF-8", **kwargs):
         Name: 0, dtype: object
         ```
     """
+    from shapely.geometry import shape
+    
     file_name = f"{dag_id}.geojson"
     local_file = download_file(file_name, url, **kwargs)
-    gdf = gpd.read_file(
-        local_file, encoding=encoding, driver="GeoJSON", from_crs=from_crs
-    )
+    
+    # 使用 json 模組讀取 GeoJSON，避免 fiona 版本問題
+    with open(local_file, encoding=encoding) as f:
+        geojson_data = json.load(f)
+    
+    features = geojson_data.get("features", [])
+    if features:
+        rows = []
+        geometries = []
+        for feature in features:
+            props = feature.get("properties", {})
+            geom = feature.get("geometry")
+            rows.append(props)
+            geometries.append(shape(geom) if geom else None)
+        gdf = gpd.GeoDataFrame(rows, geometry=geometries, crs=f"EPSG:{from_crs}")
+    else:
+        gdf = gpd.GeoDataFrame()
+    
     print(f"Read {local_file} successfully.")
     return gdf
 
@@ -705,4 +831,113 @@ class NewTaipeiAPIClient:
                 break
             page += 1
 
+        return all_data
+
+
+
+
+class TaipeiTravelAPIClient:
+    """
+    A client for retrieving data from New Taipei City Open Data API with flexible format handling.
+    """
+
+    BASE_URL = "https://www.travel.taipei/open-api/"
+
+    def __init__(self, path, input_format="json", timeout=60):
+        """
+        Args:
+            path (str): The API endpoint path.
+            input_format (str, optional): The input format. Supported formats: "json", "csv", "xml". Defaults to "json".
+            timeout (int, optional): Timeout for HTTP requests in seconds. Defaults to 60.
+        """
+        self.path = path
+        self.input_format = input_format.lower()
+        self.timeout = timeout
+
+        # Mapping of input formats to their corresponding handler functions.
+        self.handlers = {
+            "json": self._handle_json,
+            "csv": self._handle_csv,
+            "xml": self._handle_xml,
+        }
+
+        if self.input_format not in self.handlers:
+            raise ValueError("input_format must be 'json', 'csv', or 'xml'.")
+
+    def _handle_json(self, response):
+        """Handle JSON response."""
+        return response.json()
+
+    def _handle_csv(self, response):
+        """Handle CSV response by converting it to a list of dictionaries."""
+        df = pd.read_csv(io.StringIO(response.text))
+        return df.to_dict(orient="records")
+
+    def _handle_xml(self, response):
+        """Handle XML response by parsing it to a list of dictionaries."""
+        root = ET.fromstring(response.text)
+        data_list = []
+        for item in root.findall(".//row"):
+            data_dict = {child.tag: child.text for child in item}
+            data_list.append(data_dict)
+        return data_list
+
+    def get_a_data(self, page=1, **params):
+        """
+        Retrieve data from the API with optional query parameters.
+        
+        Args:
+            page (int, optional): Page number. Defaults to 0.
+            **params: Additional query parameters.
+            
+        Returns:
+            list: Converted data.
+            
+        Example:
+            client = TaipeiTravelAPIClient("your-path", input_format="json")
+            data = client.get_a_data(page=2)
+            print(data)
+        """
+        url = f"{self.BASE_URL}{self.path}"
+        params['page'] = page
+        headers = {
+            "Accept": f"application/json",
+            "User-Agent": "Mozilla/5.0"
+        }
+        response = requests.get(url, params=params, headers=headers, timeout=self.timeout, proxies=PROXIES)
+        response.raise_for_status()  # Ensure the request was successful
+
+        # Use the appropriate handler to convert the response.
+        return self.handlers[self.input_format](response)
+
+    def get_all_data(self):
+        """
+        Retrieve all data by iterating through all available pages.
+        
+        Args:
+            size (int, optional): Number of records per page. Defaults to 1000.
+            
+        Returns:
+            list: All data aggregated from all pages.
+            
+        Example:
+            client = TaipeiTravelAPIClient("your-path", input_format="json")
+            all_data = client.get_all_data(size=1000)
+            print(all_data)
+        """
+        all_data = []
+        page = 1
+        while True:
+            print(f"Fetching page {page}...")
+            try:
+                raw_data = self.get_a_data(page=page)
+            except requests.exceptions.HTTPError as e:
+                print(f"Error fetching page {page}: {e}")
+                break
+                # 每頁30筆
+            total_page = math.ceil(raw_data.get('total') / 30) 
+            all_data.extend(raw_data.get('data', []))  # Assuming 'data' is the key for the actual records
+            page += 1
+            if page == total_page:
+                break
         return all_data

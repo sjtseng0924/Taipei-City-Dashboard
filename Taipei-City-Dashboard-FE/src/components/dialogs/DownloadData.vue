@@ -3,6 +3,7 @@
 <!-- Developed by Taipei Urban Intelligence Center 2023-2024-->
 
 <script setup>
+/* global gtag */
 import { ref, computed } from "vue";
 import { useDialogStore } from "../../store/dialogStore";
 
@@ -38,10 +39,23 @@ const parsedCsv = computed(() => {
 				content.value.chart_config
 		  )
 		: "";
-	return encodeURI(csvString);
+	// Create blob with BOM for better UTF-8 support
+	const bom = '\uFEFF';
+	const blob = new Blob([bom + csvString], { type: 'text/csv;charset=utf-8;' });
+	return URL.createObjectURL(blob);
 });
 
 function handleSubmit() {
+	// 資料下載時觸發GA自訂事件
+	if (content.value.city && content.value.name && fileType.value) {
+		gtag('event','popular_data_download', {
+			dashboard_city:content.value.city,
+			component_name:content.value.name,
+			city_component:`${content.value.city}-${content.value.name}`,
+			data_type: fileType.value,
+			time: Date.now(),
+  		})
+	}
 	handleClose();
 }
 function handleClose() {
@@ -114,7 +128,7 @@ function handleClose() {
           @click="handleSubmit"
         >
           <a
-            :href="`data:text/csv;charset=utf-8,${parsedCsv}`"
+            :href="parsedCsv"
             :download="`${name}.csv`"
           >下載CSV</a>
         </button>

@@ -1,11 +1,15 @@
 // Initial Position and Settings
+const allowedDomains = ["citydashboard.taipei", "test-citydashboard.taipei"];
+
+const hasSourceLayer = allowedDomains.includes(window.location.hostname);
+
 export const MapObjectConfig = {
 	antialias: true,
 	container: "mapboxBox",
 	center: [121.536609, 25.044808],
 	maxBounds: [
 		[121.2825, 24.6961], // Southwest coordinates
-		[122.0073, 25.2979]  // Northeast coordinates
+		[122.0073, 25.2979], // Northeast coordinates
 	],
 	zoom: 9,
 	minZoom: 9,
@@ -16,18 +20,18 @@ export const MapObjectConfig = {
 // City Map View Settings
 export const CityMapView = {
 	taipei: {
-		center: [121.56376521148917, 25.086495621435404],
-		zoom: 10,
+		center: [121.536609, 25.044808],
+		zoom: 12,
 	},
-	metrotaipei:{
+	metrotaipei: {
 		center: [121.64080359050314, 24.980598540245936],
 		zoom: 9,
 	},
 	default: {
 		center: [121.56376521148917, 25.086495621435404],
 		zoom: 10,
-	}
-}
+	},
+};
 
 // All map types
 export const mapTypes = {
@@ -39,6 +43,7 @@ export const mapTypes = {
 	arc: "立體弧線圖",
 	voronoi: "泰森多邊形",
 	isoline: "等高線圖",
+	"symbol-3d": "三維捷運動態地圖",
 };
 
 // Styles for base layer "Taipei Town"
@@ -214,7 +219,10 @@ export const TpVillage = {
 export const metroTpDistrict = {
 	id: "metrotaipei_town",
 	source: "metrotaipei_town",
-	"source-layer": "metrotaipei_town",
+	// "source-layer": "metrotaipei_town",
+	...(hasSourceLayer && {
+		"source-layer": "metrotaipei_town",
+	}),
 	type: "line",
 	paint: {
 		"line-color": "white",
@@ -228,7 +236,10 @@ export const metroTpDistrict = {
 export const metroTpVillage = {
 	id: "metrotaipei_village",
 	source: "metrotaipei_village",
-	"source-layer": "metrotaipei_village",
+	// "source-layer": "metrotaipei_village",
+	...(hasSourceLayer && {
+		"source-layer": "metrotaipei_village",
+	}),
 	type: "line",
 	paint: {
 		"line-color": "#aaaaaa",
@@ -424,6 +435,9 @@ export const maplayerCommonLayout = {
 	"symbol-triangle_white": {
 		"icon-image": "triangle_white",
 	},
+	"symbol-youbike_elec": {
+		"icon-image": "youbike_elec",
+	},
 	"symbol-youbike": {
 		"icon-image": [
 			"case",
@@ -461,6 +475,20 @@ export const maplayerCommonLayout = {
 	},
 	"symbol-cctv": {
 		"icon-image": "cctv",
+		"icon-size": [
+			"interpolate",
+			["linear"],
+			["zoom"],
+			11.99,
+			0.7,
+			14,
+			1.1,
+			22,
+			1.4,
+		],
+	},
+	"symbol-live": {
+		"icon-image": "live",
 		"icon-size": [
 			"interpolate",
 			["linear"],

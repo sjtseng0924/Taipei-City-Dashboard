@@ -17,7 +17,7 @@ def _transfer(**kwargs):
     `相當於幾座大安森林公園碳匯量` as  carbon_sink_equivalent_daan_forest_parks
 
     '''
-    from utils.extract_stage import get_data_taipei_api
+    from utils.extract_stage import get_current_rid_from_page_id, get_data_taipei_api
     import pandas as pd
     from utils.transform_time import convert_str_to_time_format
     from utils.extract_stage import get_data_taipei_file_last_modified_time
@@ -37,11 +37,10 @@ def _transfer(**kwargs):
     default_table = dag_infos.get('ready_data_default_table')
     history_table = dag_infos.get('ready_data_history_table')
     # Manually set
-    rid = 'fcd166eb-4fb5-40db-962b-28899d7146fc'
     page_id = '687f5170-06e9-46be-80bc-fcae87bcaeba'
  
     # Extract
-    res = get_data_taipei_api(rid)
+    res = get_data_taipei_api(get_current_rid_from_page_id(page_id, resource_name_contains="查核成效"))
     raw_data = pd.DataFrame(res)
 
     # Transform
@@ -65,10 +64,18 @@ def _transfer(**kwargs):
     data['compliance_rate'] = data['compliance_rate'].replace('%', '', regex=True)
     data['compliance_rate'] = data['compliance_rate'].astype(float)
     data['reinspection_compliance_rate'] = data['reinspection_compliance_rate'].replace('%', '', regex=True)
-    data['audited_households'] = data['audited_households'].astype(int)
-    data['carbon_sink_daan_forest_parks'] = data['carbon_sink_daan_forest_parks'].astype(int)
-    data['power_saving_ten_thousand_kwh_per_year'] = data['power_saving_ten_thousand_kwh_per_year'].astype(int)
-    data['non_compliant_households'] = data['non_compliant_households'].astype(int)
+    # Remove thousands separators so numeric casts do not fail on values like "3,041"
+    numeric_cols = [
+        'audited_households',
+        'carbon_sink_daan_forest_parks',
+        'power_saving_ten_thousand_kwh_per_year',
+        'non_compliant_households',
+    ]
+    for col in numeric_cols:
+        data[col] = pd.to_numeric(
+            data[col].replace(',', '', regex=True),
+            errors='raise'
+        ).astype(int)
     # Time
     data['data_time'] = get_data_taipei_file_last_modified_time(page_id)
     data['data_time'] = convert_str_to_time_format(data['data_time'])

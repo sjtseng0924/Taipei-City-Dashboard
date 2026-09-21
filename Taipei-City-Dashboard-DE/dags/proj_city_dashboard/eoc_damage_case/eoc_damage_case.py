@@ -8,20 +8,19 @@ def _transfer(**kwargs):
 
         data example
         {
-            "Disasterid": "d9ea6131-9f91-4100-8607-717095df89e7",
-            "DPName": "尼伯特颱風",
-            "DPIssueDateTime": "2016-07-06T21:00:00",
-            "ReportSeq": 14,
-            "ReportSendTime": "2016-07-08T20:58:19",
-            "SuspendedWaterSupplyCount": 0,
-            "SuspendedElectricitySupplyCount": 403,
-            "SuspendedTelSupplyCount": 0,
-            "SuspendedGasSupplyCount": 0,
+            "DPID": "70819f56-6c23-4153-ac41-a206481c47ed",
+            "DPName": "1141102_毒氣瓦斯外洩",
+            "IssueTime": "2025-12-03T15:18:00",
+            "ReportSeq": 131,
+            "WaterOutage": 0,
+            "PowerOutage": 0,
+            "TelSuspended": 0,
+            "Gas": 0,
             "District": "士林區",
-            "UnWithoutWater": 0,
+            "UnWaterOutage": 0,
             "UnPowerOutage": 0,
-            "UnTelTempDiscon": 0,
-            "UnGas": 22
+            "UnTelSuspended": 0,
+            "UnGas": 0
         }
     '''
     from utils.load_stage import save_dataframe_to_postgresql,update_lasttime_in_data_to_dataset_info
@@ -34,17 +33,27 @@ def _transfer(**kwargs):
     # raw_data_db_uri = kwargs.get('raw_data_db_uri')
     # data_folder = kwargs.get('data_folder')
     ready_data_db_uri = kwargs.get('ready_data_db_uri')
-    proxies = kwargs.get('proxies')
+    # proxies = kwargs.get('proxies')
     # Retrieve some essential args from `job_config.json`.
     dag_infos = kwargs.get('dag_infos')
     dag_id = dag_infos.get('dag_id')
     load_behavior = dag_infos.get('load_behavior')
     default_table = dag_infos.get('ready_data_default_table')
     history_table = dag_infos.get('ready_data_history_table')
-    history_table = dag_infos.get('ready_data_history_table')
-    URL = '''https://www.eocmap.gov.taipei/DisasterOperationSystemWebAPIUnite/api/DoItTaipeiApi/GetDamageCaseData'''
-    raw_data = requests.get(URL, proxies=proxies)
+    URL = '''https://tfd.blob.core.windows.net/blobfs/data/TEST-T-SAGEDamageCaseData.json'''
+
+    raw_data = requests.get(URL)
     raw_data_json = raw_data.json()
+    # 處理 API 回傳空資料或無資料狀態
+    if not raw_data_json:
+        print("!!!data is empty!!!")
+        return "!!!data is empty!!!"
+    # API 回傳 {"open":"現在無資料"} 表示目前沒有災情資料
+    if isinstance(raw_data_json, dict) and "open" in raw_data_json:
+        print(f"!!!API 回傳: {raw_data_json}!!!")
+        return "!!!data is empty!!!"
+    if isinstance(raw_data_json, dict):
+        raw_data_json = [raw_data_json]
     df = pd.DataFrame(raw_data_json)
     if df.empty:
         return "!!!data is empty!!!"
@@ -53,23 +62,27 @@ def _transfer(**kwargs):
 
 
     data = data.rename(columns={
-        "Disasterid": "disaster_id",
-        "DPIssueDateTime": "dp_issue_date_time",
+        "DPID": "disaster_id",
+        "IssueTime": "dp_issue_date_time",
         "DPName": "dp_name",
         "ReportSeq": "report_seq",
-        "ReportSendTime": "report_send_time",
-        "SuspendedWaterSupplyCount": "suspended_water_supply_count",
-        "SuspendedElectricitySupplyCount": "suspended_electricity_supply_count",
-        "SuspendedTelSupplyCount": "suspended_tel_supply_count",
-        "SuspendedGasSupplyCount": "suspended_gas_supply_count",
+        "WaterOutage": "suspended_water_supply_count",
+        "PowerOutage": "suspended_electricity_supply_count",
+        "TelSuspended": "suspended_tel_supply_count",
+        "Gas": "suspended_gas_supply_count",
         "District": "district",
-        "UnWithoutWater": "un_without_water",
+        "UnWaterOutage": "un_without_water",
         "UnPowerOutage": "un_power_outage",
-        "UnTelTempDiscon": "un_tel_temp_discon",
+        "UnTelSuspended": "un_tel_temp_discon",
         "UnGas": "un_gas"
     })
-    data['data_time'] = get_tpe_now_time_str()
+    
+    # 新 API 沒有 ReportSendTime 欄位，給定預設值空字串或 None
+    if "report_send_time" not in data.columns:
+        data["report_send_time"] = None
 
+    data['data_time'] = get_tpe_now_time_str()
+    data = data[data["disaster_id"] != "f804b5b3-3526-4692-87d1-6e6dc785966f"]
     ready_data = data.copy()
     print(f"ready_data =========== {ready_data.columns}")
     # Load

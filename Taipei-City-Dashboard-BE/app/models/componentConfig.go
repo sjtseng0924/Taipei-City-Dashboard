@@ -3,7 +3,10 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
+	"math"
 	"slices"
+	"strconv"
 	"time"
 
 	"github.com/lib/pq"
@@ -70,6 +73,14 @@ type CityComponent struct{
 	City		   string          `json:"city"`
 }
 
+type CityComponentScore struct{
+	ID             int64           `json:"id"`
+	Index          string          `json:"index"`
+	Name           string          `json:"name"`
+	City		   string          `json:"city"`
+	Score 		   float64         `json:"score"`
+}
+
 // ComponentMap is the model for the component_maps table.
 type ComponentMap struct {
 	ID       int64            `json:"id" gorm:"column:id;autoincrement;primaryKey"`
@@ -90,7 +101,45 @@ type ComponentChart struct {
 	Types pq.StringArray `json:"types" gorm:"column:types;type:varchar[]"`
 	Unit  string         `json:"unit" gorm:"column:unit;type:varchar"`
 }
+
+// QuertChartAndConponentForQdrant defines the structure for query_charts&component data fetched for Qdrant.
+// It's a subset of fields from query_charts and components.
+type QuertChartAndConponentForQdrant struct {
+    ID       int64  `gorm:"column:id"`
+    Index    string `gorm:"column:index"`
+    Name     string `gorm:"column:name"`
+    City     string `gorm:"column:city"`
+    LongDesc string `gorm:"column:long_desc"`
+    UseCase  string `gorm:"column:use_case"`
+}
+
 /* ----- Handlers ----- */
+
+// GetPublicComponentsForQdrant fetches all query_charts and components that are part of a public (non-personal) dashboard.
+// This data is used to rebuild the Qdrant vector index.
+func GetPublicComponentsForQdrant() (results []QuertChartAndConponentForQdrant, err error) {
+    // subQueryGroups := SELECT DISTINCT id FROM "groups" g WHERE is_personal IS FALSE
+    subQueryGroups := DBManager.Table("groups").Select("id").Where("is_personal IS FALSE")
+
+    // subQueryDashboards := SELECT DISTINCT dashboard_id FROM dashboard_groups dg WHERE group_id IN (subQueryGroups)
+    subQueryDashboards := DBManager.Table("dashboard_groups").Select("dashboard_id").Where("group_id IN (?)", subQueryGroups)
+
+    // subQueryComponents := SELECT DISTINCT unnest(components) FROM dashboards d WHERE id IN (subQueryDashboards)
+    subQueryComponents := DBManager.Table("dashboards").Select("DISTINCT unnest(components)").Where("id IN (?)", subQueryDashboards)
+
+    // Final Query
+    err = DBManager.Table("query_charts as qc").
+        Select("c.id, qc.index, c.name, qc.city, qc.long_desc, qc.use_case").
+        Joins("INNER JOIN components c ON qc.index = c.index").
+        Where("c.id IN (?)", subQueryComponents).
+        Scan(&results).Error
+
+    if err != nil {
+        return nil, err
+    }
+
+    return results, nil
+}
 
 // createTempComponentDB joins the components, component_maps, and component_charts tables and selects the columns to return.
 func createTempComponentDB() *gorm.DB {
@@ -205,6 +254,80 @@ func GetComponentByIDAll(id int) (component []CityComponent, err error) {
 	if err != nil {
 		return component, err
 	}
+	return component, nil
+}	
+
+func GetComponentByQueryVector(queryString string, limit int, scoreThreshold float64) (component []CityComponentScore, err error) {
+	vector, err := GenVector(queryString)
+	if err != nil {
+		return component, err
+	}
+
+	result, err := queryQdrant(vector, limit, scoreThreshold)
+	if err != nil {
+		return component, err
+	}
+
+	points := result.Result.Points
+
+	var queryOutput []map[string]interface{}
+	for _, p := range points {
+		payload := p.Payload
+		roundedScore := math.Round(p.Score*10000) / 10000
+
+		entry := map[string]interface{}{
+			"id":    payload["id"],
+			"index": payload["index"],
+			"name":  payload["name"],
+			"city":  payload["city"],
+			"score": roundedScore,
+		}
+
+		queryOutput = append(queryOutput, entry)
+	}
+
+	for _, item := range queryOutput {
+		c := CityComponentScore{}
+		
+		// Safe conversion for ID
+		if idVal, ok := item["id"]; ok {
+			switch v := idVal.(type) {
+			case float64:
+				c.ID = int64(v)
+			case string:
+				c.ID, _ = strconv.ParseInt(v, 10, 64)
+			case int:
+				c.ID = int64(v)
+			case int64:
+				c.ID = v
+			}
+		}
+
+		// Safe conversion for Index
+		if indexVal, ok := item["index"]; ok {
+			c.Index = fmt.Sprintf("%v", indexVal)
+		}
+
+		// Safe conversion for Name
+		if nameVal, ok := item["name"]; ok {
+			c.Name = fmt.Sprintf("%v", nameVal)
+		}
+
+		// Safe conversion for City
+		if cityVal, ok := item["city"]; ok {
+			c.City = fmt.Sprintf("%v", cityVal)
+		}
+
+		// Safe conversion for Score
+		if scoreVal, ok := item["score"]; ok {
+			if s, ok := scoreVal.(float64); ok {
+				c.Score = s
+			}
+		}
+
+		component = append(component, c)
+	}
+
 	return component, nil
 }
 

@@ -4,6 +4,9 @@ import (
 	"TaipeiCityDashboardBE/logs"
 	"os"
 	"strconv"
+
+	"github.com/sugarme/tokenizer"
+	ort "github.com/yalue/onnxruntime_go"
 )
 
 // IssoConfig defines the structure for Isso configuration
@@ -21,6 +24,7 @@ type DatabaseConfig struct {
 	User     string
 	Password string
 	DBName   string
+	SSLMode  string
 }
 
 // RedisConfig defines the structure for Redis configuration
@@ -29,6 +33,25 @@ type RedisConfig struct {
 	Port     string
 	Password string
 	DB       int
+}
+
+type QdrantConfig struct {
+	Url          string
+	Collection   string
+	ApiKey       string
+}
+
+type LMConfig struct {
+	ModelPath    string
+}
+
+type TWCCConfig struct {
+	ApiUrl        string
+	ApiKey        string
+	Model         string
+	Timeout       int
+	MaxRetry      int
+	MaxConcurrent int
 }
 
 var (
@@ -49,6 +72,7 @@ var (
 		User:     getEnv("DB_MANAGER_USER", ""),
 		Password: getEnv("DB_MANAGER_PASSWORD", ""),
 		DBName:   getEnv("DB_MANAGER_DBNAME", "dashboardmanager"),
+	SSLMode:  getEnv("DB_MANAGER_SSLMODE", "disable"),
 	}
 
 	// PostgresDashboard defines the configuration for the dashboard database
@@ -58,6 +82,7 @@ var (
 		User:     getEnv("DB_DASHBOARD_USER", ""),
 		Password: getEnv("DB_DASHBOARD_PASSWORD", ""),
 		DBName:   getEnv("DB_DASHBOARD_DBNAME", "dashboard"),
+	SSLMode:  getEnv("DB_DASHBOARD_SSLMODE", "disable"),
 	}
 
 	// only used in the init function.
@@ -77,6 +102,28 @@ var (
 		Password: getEnv("REDIS_PASSWORD", ""),
 		DB:       getIntEnv("REDIS_DB", 0),
 	}
+
+	Qdrant = QdrantConfig{
+		Url:        getEnv("QDRANT_URL","http://127.0.0.1:6333"),
+		Collection: getEnv("QDRANT_COLLECTION",""),
+		ApiKey:     getEnv("QDRANT_API_KEY",""),
+	}
+
+	LM = LMConfig{
+		ModelPath:  getEnv("LM_MODEL_PATH","/opt/lm_model/onnx-e5/"),
+	}
+
+	TWCC = TWCCConfig{
+		ApiUrl:        getEnv("TWCC_API_URL", "https://api-ams.twcc.ai/api"),
+		ApiKey:        getEnv("TWCC_API_KEY", "default_your_twcc_api_key_here"),
+		Model:         getEnv("TWCC_MODEL", "llama3.3-ffm-70b-32k-chat"),
+		Timeout:       getIntEnv("TWCC_TIMEOUT", 60),
+		MaxRetry:      getIntEnv("TWCC_MAX_RETRY", 2),
+		MaxConcurrent: getIntEnv("TWCC_MAX_CONCURRENT", 100),
+	}
+	
+	LMSession *ort.DynamicSession[int64, float32]
+	LMTokenizer *tokenizer.Tokenizer
 )
 
 func init() {
